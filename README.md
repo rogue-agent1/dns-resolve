@@ -1,11 +1,10 @@
 # dns-resolve
 
-DNS record parser and zone file operations.
+Single-file Python CLI. Zero dependencies.
 
 ## Usage
 
 ```bash
+python3 dns_resolve.py
 python3 dns_resolve.py test
 ```
-
-Zero dependencies. Python 3.8+.
