@@ -1,14 +1,9 @@
-# dns-resolve
+# dns-resolver
 
-DNS resolver using socket
+Recursive DNS resolver simulator. Single-file Python CLI, zero dependencies.
 
 ## Usage
 
 ```bash
-python3 dns_resolve.py --help
+python3 dns_resolve.py
 ```
-
-## Features
-
-- Zero dependencies (Python 3.8+)
-- Single file implementation
