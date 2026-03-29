@@ -1,71 +1,56 @@
 #!/usr/bin/env python3
-"""DNS record parser and resolver (using socket/struct, no dnspython)."""
-import sys, socket, struct, random
+"""DNS record types and zone file parser. Zero dependencies."""
 
-def build_query(domain, qtype=1):
-    tid = random.randint(0, 65535)
-    header = struct.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0)
-    question = b""
-    for label in domain.split("."):
-        question += bytes([len(label)]) + label.encode()
-    question += b"\x00" + struct.pack(">HH", qtype, 1)
-    return header + question, tid
+RECORD_TYPES = {"A":1,"AAAA":28,"CNAME":5,"MX":15,"NS":2,"TXT":16,"SOA":6,"PTR":12,"SRV":33}
 
-def parse_response(data):
-    tid, flags, qdcount, ancount, _, _ = struct.unpack(">HHHHHH", data[:12])
-    offset = 12
-    for _ in range(qdcount):
-        while data[offset] != 0:
-            if data[offset] & 0xC0 == 0xC0: offset += 2; break
-            offset += data[offset] + 1
-        else:
-            offset += 1
-        offset += 4
-    records = []
-    for _ in range(ancount):
-        if data[offset] & 0xC0 == 0xC0: offset += 2
-        else:
-            while data[offset] != 0: offset += data[offset] + 1
-            offset += 1
-        rtype, rclass, ttl, rdlength = struct.unpack(">HHIH", data[offset:offset+10])
-        offset += 10
-        rdata = data[offset:offset+rdlength]
-        if rtype == 1 and rdlength == 4:
-            records.append({"type": "A", "ttl": ttl, "value": socket.inet_ntoa(rdata)})
-        elif rtype == 28 and rdlength == 16:
-            records.append({"type": "AAAA", "ttl": ttl, "value": socket.inet_ntop(socket.AF_INET6, rdata)})
-        else:
-            records.append({"type": rtype, "ttl": ttl, "value": rdata.hex()})
-        offset += rdlength
-    return records
+class DNSRecord:
+    def __init__(self, name, rtype, value, ttl=3600, priority=None):
+        self.name = name; self.rtype = rtype; self.value = value
+        self.ttl = ttl; self.priority = priority
+    def __repr__(self):
+        p = f" {self.priority}" if self.priority is not None else ""
+        return f"{self.name} {self.ttl} IN {self.rtype}{p} {self.value}"
 
-def resolve(domain, server="8.8.8.8", qtype=1, timeout=3):
-    query, tid = build_query(domain, qtype)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(timeout)
-    try:
-        sock.sendto(query, (server, 53))
-        data, _ = sock.recvfrom(4096)
-        return parse_response(data)
-    finally:
-        sock.close()
+class ZoneFile:
+    def __init__(self):
+        self.records = []; self.origin = ""; self.ttl = 3600
 
-def test():
-    q, tid = build_query("example.com")
-    assert len(q) > 12
-    assert 0 <= tid <= 65535
-    # Parse a minimal crafted response
-    header = struct.pack(">HHHHHH", tid, 0x8180, 1, 1, 0, 0)
-    question = b"\x07example\x03com\x00" + struct.pack(">HH", 1, 1)
-    answer = b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 300, 4) + socket.inet_aton("93.184.216.34")
-    records = parse_response(header + question + answer)
-    assert len(records) == 1
-    assert records[0]["type"] == "A"
-    assert records[0]["value"] == "93.184.216.34"
-    print("  dns_resolve: ALL TESTS PASSED")
+    def add(self, name, rtype, value, ttl=None, priority=None):
+        self.records.append(DNSRecord(name, rtype, value, ttl or self.ttl, priority))
+        return self
+
+    def lookup(self, name, rtype=None):
+        results = []
+        for r in self.records:
+            if r.name == name and (rtype is None or r.rtype == rtype):
+                results.append(r)
+        return results
+
+    def to_text(self):
+        lines = [f"$ORIGIN {self.origin}" if self.origin else "", f"$TTL {self.ttl}"]
+        for r in self.records: lines.append(str(r))
+        return "\n".join(l for l in lines if l)
+
+    @classmethod
+    def parse(cls, text):
+        zone = cls()
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line or line.startswith(";"): continue
+            if line.startswith("$ORIGIN"): zone.origin = line.split()[1]; continue
+            if line.startswith("$TTL"): zone.ttl = int(line.split()[1]); continue
+            parts = line.split()
+            if len(parts) >= 4 and parts[2] == "IN":
+                name = parts[0]; ttl = int(parts[1]); rtype = parts[3]
+                if rtype == "MX" and len(parts)>=6:
+                    zone.add(name, rtype, parts[5], ttl, int(parts[4]))
+                else:
+                    zone.add(name, rtype, " ".join(parts[4:]), ttl)
+        return zone
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test": test()
-    else:
-        domain = sys.argv[2] if len(sys.argv) > 2 else "example.com"
-        for r in resolve(domain): print(f"{r['type']}: {r['value']} (TTL: {r['ttl']})")
+    z = ZoneFile(); z.origin = "example.com."
+    z.add("@", "A", "93.184.216.34")
+    z.add("www", "CNAME", "example.com.")
+    z.add("@", "MX", "mail.example.com.", priority=10)
+    print(z.to_text())
